@@ -117,9 +117,8 @@ inline void prepare_sleep() {
 EMPTY_INTERRUPT(PCINT0_vect);
 
 inline void WDT_on() {
-    // Setup watchdog timer to only interrupt, not reset, every 16ms.
+    // watchdog timer löst alle 16ms einen Interrupt aus
     cli();                          // Disable interrupts
-//    wdt_reset();                    // Reset the WDT
     WDTCR |= (1<<WDCE) | (1<<WDE);  // Start timed sequence
     WDTCR = (1<<WDTIE);             // Enable interrupt every 16ms
     sei();                          // Enable interrupts
@@ -128,7 +127,6 @@ inline void WDT_on() {
 inline void WDT_off()
 {
     cli();                          // Disable interrupts
-//    wdt_reset();                    // Reset the WDT
     MCUSR &= ~(1<<WDRF);            // Clear Watchdog reset flag
     WDTCR |= (1<<WDCE) | (1<<WDE);  // Start timed sequence
     WDTCR = 0x00;                   // Disable WDT
@@ -137,17 +135,17 @@ inline void WDT_off()
 
 void sleep_until_switch_press()
 {
-    // Turn the WDT off so it doesn't wake us from sleep
+    // WDT aus, sonst weckt der uns aus dem sleep-mode
     WDT_off();
     press_duration = 0;
-    // wait for switch to be up
+    // Warten bis der Taster offen ist
     while (is_pressed());
-
+    // CPU anhalten
 	SLEEP;
+	// hier gehts nach den Key-press Interrupt wieder weiter
 
-    // Turn the WDT back on to check for switch presses
+    // WDT wieder starten
     WDT_on();
-    // Go back to main program
 }
 
 
@@ -197,14 +195,20 @@ inline void timeout_long() {
 	if( state & RUN && PWM_LVL == 255 ) state = HOT ;
 }
 
-#define flick(off,on) { \
-	old_lvl = PWM_LVL;  \
-	PWM_LVL = 0; \
-	_delay_ms( off ); \
-	PWM_LVL = old_lvl; \
-	_delay_ms(on); \
+void flick(uint8_t off,uint8_t on) {
+	old_lvl = PWM_LVL;
+	PWM_LVL = 0;
+	delay_ms( off );
+	PWM_LVL = old_lvl;
+	delay_ms(on);
 }
 
+void delay_ms(uint8_t msec) { 
+    while (msec > 0) { 
+        msec--; 
+        _delay_ms(1); 
+    } 
+}  
 inline void do_ramp() {
 	#ifdef BATTMON
 	return;
@@ -218,7 +222,6 @@ inline void do_ramp() {
 inline void battmon() {
 	state = RUN;
 	#ifdef BATTMON
-	    adcread();
 	    akkuspannung = adcresult;
 //	   i=150; // debug
 	   flick(BATTMON_VORBLITZZEIT_AUS,BATTMON_VORBLITZZEIT_AN);
@@ -232,7 +235,7 @@ inline void battmon() {
 
 // The watchdog timer is called every 16ms
 ISR(WDT_vect) {
-
+	if( PWM_LVL == 0 ) adcread();
 	if (is_pressed()) {
 		#ifndef BATTMON
 		ramp_dir_switched = 0;
@@ -289,7 +292,7 @@ int main(void)
 
 		if (state & OFF ) {
 			PWM_SET_LVL( 0 );
-			_delay_ms(1); // Need this here, maybe instructions for PWM output not getting executed before shutdown?
+			delay_ms(1); // Need this here, maybe instructions for PWM output not getting executed before shutdown?
 			//SLEEP;
 			sleep_until_switch_press();
 			#ifndef BATTMON
