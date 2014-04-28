@@ -18,6 +18,8 @@
 #define RAMP_ANSCHLAG_AUS   10
 
 #define MODES			0,32,125,255,100	// Modes, erster Wert muss 0 sein, letzter Mode ist immer Battmon mit helligkeit WERT
+#define PWM_LOWBATT         40              // Auf diesen Wert wird runter geschaltet wenn LOWBATT_VALUE erreicht wurde
+#define LOWBATT_VALUE      130              // kritische Akkuspannung
 
 #define PWM_HOT             32
 #define TURBO_TIMEOUT_SEC   70                // nach dieser Zeit im high-mode wird auf PWM_HOT zurückgeschaltet
@@ -103,7 +105,7 @@ static uint8_t old_lvl= 0;
 volatile uint8_t state = OFF;
 static uint16_t turbo_ticks = 0;
 static uint16_t run_ticks = 0;
-volatile uint8_t akkuspannung = 0;
+static uint8_t akkuspannung = 0;
 
 
 inline void prepare_sleep() {
@@ -138,12 +140,8 @@ void sleep_until_switch_press()
     // WDT aus, sonst weckt der uns aus dem sleep-mode
     WDT_off();
     press_duration = 0;
-    // Warten bis der Taster offen ist
-    while (is_pressed());
     // CPU anhalten
 	SLEEP;
-	// hier gehts nach den Key-press Interrupt wieder weiter
-
     // WDT wieder starten
     WDT_on();
 }
@@ -152,7 +150,7 @@ void sleep_until_switch_press()
 // Debounced switch press value
 int is_pressed()
 {
-	// switch werte werden in buffer gespeichert
+	// Zwischenspeicher für switch readouts
 	static uint8_t buffer = 0x00;
 	// alle bits um 1 nach links schieben und aktuellen Wert anhängen, 0 ist low für gedrückt, 1 für offen (pull-up)
 	buffer = (buffer << 1) | ((PINB & (1 << SWITCH_PIN)) == 0);
@@ -189,21 +187,23 @@ inline void long_press() {
 
 inline void timeout_short() {
 	if( state & SWITCH ) state = RUN;
+	// unterspannung signalisieren
+	if( PWM_LVL > PWM_LOWBATT && akkuspannung <= LOWBATT_VALUE ) PWM_SET_LVL( PWM_LOWBATT );
 }
 
 inline void timeout_long() {
 	if( state & RUN && PWM_LVL == 255 ) state = HOT ;
 }
 
-void flick(uint8_t off,uint8_t on) {
+void flick(uint16_t off,uint16_t on) {
 	old_lvl = PWM_LVL;
 	PWM_LVL = 0;
 	delay_ms( off );
 	PWM_LVL = old_lvl;
-	delay_ms(on);
+	delay_ms( on );
 }
 
-void delay_ms(uint8_t msec) { 
+void delay_ms(uint16_t msec) { 
     while (msec > 0) { 
         msec--; 
         _delay_ms(1); 
@@ -222,8 +222,8 @@ inline void do_ramp() {
 inline void battmon() {
 	state = RUN;
 	#ifdef BATTMON
-	    akkuspannung = adcresult;
-//	   i=150; // debug
+       akkuspannung = adcresult;
+//	   akkuspannung=129; // debug
 	   flick(BATTMON_VORBLITZZEIT_AUS,BATTMON_VORBLITZZEIT_AN);
 	   while (akkuspannung > BATTMON && (state & RUN)) {
          flick( BATTMON_BLITZ_AUS, BATTMON_BLITZ_AN );
@@ -292,8 +292,7 @@ int main(void)
 
 		if (state & OFF ) {
 			PWM_SET_LVL( 0 );
-			delay_ms(1); // Need this here, maybe instructions for PWM output not getting executed before shutdown?
-			//SLEEP;
+			delay_ms(10); // ohne Delay wird PWM-Wert tatsächlich nicht gesetzt vor sleep
 			sleep_until_switch_press();
 			#ifndef BATTMON
 				ramp_dir = UP;
