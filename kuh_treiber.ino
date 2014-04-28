@@ -6,7 +6,29 @@
  * BSD LICENSE
  */
 
-#define BATTMON			   124 // Battery Monitor Vergleichswert
+
+/*
+ * Schaltbild der für die Spannungsmessung relevanten Teile
+ *             VCC
+ *              |
+ *              D1  <- hier fallen 0.2V ab
+ * --------     |
+ *      8 |-----| 
+ *        |     R1
+ *      7 |-----|
+ *        |     |
+ * Attiny |     R2
+ *        |     |
+ *        |    GND
+ *        |
+ *
+ */
+#define LOWBATT_VOLTAGE    3.2              // kritische Akkuspannung in Volt
+#define R1                  18              // R1 in kOhm (siehe Shaltbild)
+#define R2                 4.7              // R2 in kOhm (siehe Shaltbild)
+#define PWM_LOWBATT         40              // Auf diesen Wert wird runter geschaltet wenn LOWBATT_VALUE erreicht wurde
+
+#define BATTMON			       // Battery Monitor aktivieren? BATTMON-Spannung wird jetzt in LOWBATT_VOLTAGE eingestellt.
                                // wenn nicht definert, wird die RAMP-Funktion aktiviert
 #define BATTMON_STEP         5 // schrittweite. je kleiner um so öfter blitzt es bei gleicher spannung
 #define BATTMON_VORBLITZZEIT_AN   100
@@ -18,8 +40,9 @@
 #define RAMP_ANSCHLAG_AUS   10
 
 #define MODES			0,32,125,255,100	// Modes, erster Wert muss 0 sein, letzter Mode ist immer Battmon mit helligkeit WERT
-#define PWM_LOWBATT         40              // Auf diesen Wert wird runter geschaltet wenn LOWBATT_VALUE erreicht wurde
-#define LOWBATT_VALUE      130              // kritische Akkuspannung
+
+
+#define LOWBATT_VALUE (int) (((LOWBATT_VOLTAGE - 0.2) * R2 * 255) / ((R1 + R2) * 1.1))
 
 #define PWM_HOT             32
 #define TURBO_TIMEOUT_SEC   70                // nach dieser Zeit im high-mode wird auf PWM_HOT zurückgeschaltet
@@ -225,7 +248,7 @@ inline void battmon() {
        akkuspannung = adcresult;
 //	   akkuspannung=129; // debug
 	   flick(BATTMON_VORBLITZZEIT_AUS,BATTMON_VORBLITZZEIT_AN);
-	   while (akkuspannung > BATTMON && (state & RUN)) {
+	   while (akkuspannung > LOWBATT_VALUE && (state & RUN)) {
          flick( BATTMON_BLITZ_AUS, BATTMON_BLITZ_AN );
 	     akkuspannung = akkuspannung - BATTMON_STEP;
 	   }
