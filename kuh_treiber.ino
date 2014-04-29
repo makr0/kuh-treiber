@@ -24,8 +24,8 @@
  *
  */
 #define LOWBATT_VOLTAGE    3.2              // kritische Akkuspannung in Volt
-#define R1                  18              // R1 in kOhm (siehe Shaltbild)
-#define R2                 4.7              // R2 in kOhm (siehe Shaltbild)
+#define R1                  18              // R1 in kOhm (siehe Schaltbild)
+#define R2                 4.7              // R2 in kOhm (siehe Schaltbild)
 #define PWM_LOWBATT         40              // Auf diesen Wert wird runter geschaltet wenn LOWBATT_VALUE erreicht wurde
 
 #define BATTMON			       // Battery Monitor aktivieren? BATTMON-Spannung wird jetzt in LOWBATT_VOLTAGE eingestellt.
@@ -126,8 +126,7 @@ static uint8_t ramp_dir_switched = 0;
 #endif
 static uint8_t old_lvl= 0;
 volatile uint8_t state = OFF;
-static uint16_t turbo_ticks = 0;
-static uint16_t run_ticks = 0;
+volatile uint16_t run_ticks = 0;
 static uint8_t akkuspannung = 0;
 
 
@@ -183,7 +182,6 @@ int is_pressed()
 
 inline void tap() {
 	run_ticks = 0;
-	turbo_ticks = 0;
 
 	if( state & ( RAMP | RUN | HOT ) ){ state = OFF; return;}
 	if( state & ( OFF | WAKEUP) ) { state = SWITCH; mode_idx = 1; return;}
