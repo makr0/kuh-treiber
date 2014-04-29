@@ -11,7 +11,7 @@
  * Schaltbild der für die Spannungsmessung relevanten Teile
  *             VCC
  *              |
- *              D1  <- hier fallen 0.2V ab
+ *              D1  <- hier fallen VD ab
  * --------     |
  *      8 |-----| 
  *        |     R1
@@ -21,35 +21,37 @@
  *        |     |
  *        |    GND
  *        |
- *
  */
-#define LOWBATT_VOLTAGE    3.2              // kritische Akkuspannung in Volt
-#define R1                  18              // R1 in kOhm (siehe Schaltbild)
-#define R2                 4.7              // R2 in kOhm (siehe Schaltbild)
-#define PWM_LOWBATT         40              // Auf diesen Wert wird runter geschaltet wenn LOWBATT_VALUE erreicht wurde
+#define LOWBATT_VOLTAGE     3.5    // kritische Akkuspannung in Volt Bei dieser Spannung wird auf PWM_LOWBATT geschaltet
+#define R1                 17.8    // R1 in kOhm (siehe Schaltbild)
+#define R2                 4.67    // R2 in kOhm (siehe Schaltbild)
+#define VD                   0    // Spannungsabfall über die Diode.
+#define PWM_LOWBATT         40    // Auf diesen Wert wird runter geschaltet wenn LOWBATT_VALUE erreicht wurde
 
-#define BATTMON			       // Battery Monitor aktivieren? BATTMON-Spannung wird jetzt in LOWBATT_VOLTAGE eingestellt.
-                               // wenn nicht definert, wird die RAMP-Funktion aktiviert
-#define BATTMON_STEP         5 // schrittweite. je kleiner um so öfter blitzt es bei gleicher spannung
-#define BATTMON_VORBLITZZEIT_AN   100
-#define BATTMON_VORBLITZZEIT_AUS  800
+#define BATTMON			          // Battery Monitor aktivieren? Wenn nicht definert, wird die RAMP-Funktion aktiviert
+#define BATTMON_REF_VOLTAGE  3.5  // Referenzspannung für Akkumonitor. Bei dieser Spannung blitzt er ein Mal
+
+#define BATTMON_STEP         6 // schrittweite. je kleiner um so öfter blitzt es bei gleicher spannung
+#define BATTMON_VORBLITZZEIT_AN    500
+#define BATTMON_VORBLITZZEIT_AUS  1000
 #define BATTMON_BLITZ_AN    40
-#define BATTMON_BLITZ_AUS  300
+#define BATTMON_BLITZ_AUS  200
 
 #define RAMP_ANSCHLAG_AN   100
 #define RAMP_ANSCHLAG_AUS   10
 
 #define MODES			0,32,125,255,100	// Modes, erster Wert muss 0 sein, letzter Mode ist immer Battmon mit helligkeit WERT
 
-
-#define LOWBATT_VALUE (int) (((LOWBATT_VOLTAGE - 0.2) * R2 * 255) / ((R1 + R2) * 1.1))
+// umrechnen der Spannungen in ADC-Wandler werte (8 bit)
+#define LOWBATT_VALUE     ((int) (((LOWBATT_VOLTAGE     - VD) * R2 * 255) / ((R1 + R2) * 1.1)))
+#define BATTMON_REF_VALUE ((int) (((BATTMON_REF_VOLTAGE - VD) * R2 * 255) / ((R1 + R2) * 1.1)))
 
 #define PWM_HOT             32
 #define TURBO_TIMEOUT_SEC   70                // nach dieser Zeit im high-mode wird auf PWM_HOT zurückgeschaltet
 
 #define TURBO_TIMEOUT	TURBO_TIMEOUT_SEC * 62.5 // Sekunden in ticks umrechnen (1 tick = .016 s)
 
-#define SHORT_TIMEOUT	    63 // nach dieser Anzahl ticks wird auf RUN geschaltet
+#define SHORT_TIMEOUT	   63 // nach dieser Anzahl ticks wird auf RUN geschaltet
 
 #define MAX_RAMP	       255 // 
 #define MIN_RAMP	         7 // 
@@ -120,14 +122,13 @@ PROGMEM  uint8_t modes[] = { MODES };
 volatile uint8_t mode_idx = 0;
 static uint8_t press_duration = 0;
 #ifndef BATTMON
-static int8_t ramp_dir = UP;
+volatile int8_t ramp_dir = UP;
 static uint8_t ramp_delay = 0;
 static uint8_t ramp_dir_switched = 0;
 #endif
 static uint8_t old_lvl= 0;
 volatile uint8_t state = OFF;
-volatile uint16_t run_ticks = 0;
-static uint8_t akkuspannung = 0;
+static uint16_t run_ticks = 0;
 
 
 inline void prepare_sleep() {
@@ -209,20 +210,36 @@ inline void long_press() {
 inline void timeout_short() {
 	if( state & SWITCH ) state = RUN;
 	// unterspannung signalisieren
-	if( PWM_LVL > PWM_LOWBATT && akkuspannung <= LOWBATT_VALUE ) PWM_SET_LVL( PWM_LOWBATT );
+	adcread();
+	if( PWM_LVL > PWM_LOWBATT && (adcresult <= LOWBATT_VALUE) ) PWM_SET_LVL( PWM_LOWBATT );
 }
 
 inline void timeout_long() {
 	if( state & RUN && PWM_LVL == 255 ) state = HOT ;
 }
 
+#ifdef BATTMON
 void flick(uint16_t off,uint16_t on) {
 	old_lvl = PWM_LVL;
 	PWM_LVL = 0;
 	delay_ms( off );
 	PWM_LVL = old_lvl;
 	delay_ms( on );
+	PWM_LVL = 0;
+	delay_ms( off );
+	PWM_LVL = old_lvl;
 }
+#else
+void flick() {
+	old_lvl = PWM_LVL;
+	PWM_LVL = 0;
+	_delay_ms( RAMP_ANSCHLAG_AUS );
+	PWM_LVL = old_lvl;
+	_delay_ms( RAMP_ANSCHLAG_AN );
+}
+
+#endif
+
 
 void delay_ms(uint16_t msec) { 
     while (msec > 0) { 
@@ -235,7 +252,7 @@ inline void do_ramp() {
 	return;
 	#else
 	if( ramp_dir < 0 && PWM_LVL == MIN_RAMP
-	 || ramp_dir > 0 && PWM_LVL == MAX_RAMP ) {flick(RAMP_ANSCHLAG_AUS,RAMP_ANSCHLAG_AN); return; }
+	 || ramp_dir > 0 && PWM_LVL == MAX_RAMP ) {flick(); return; }
 	PWM_LVL += ramp_dir;
 	#endif
 }
@@ -243,12 +260,14 @@ inline void do_ramp() {
 inline void battmon() {
 	state = RUN;
 	#ifdef BATTMON
-       akkuspannung = adcresult;
-//	   akkuspannung=129; // debug
+	   uint8_t akkuspannung_copy;
+	   adcread();
+       akkuspannung_copy = adcresult;
+//	   akkuspannung_copy=129; // debug
 	   flick(BATTMON_VORBLITZZEIT_AUS,BATTMON_VORBLITZZEIT_AN);
-	   while (akkuspannung > LOWBATT_VALUE && (state & RUN)) {
+	   while (akkuspannung_copy > BATTMON_REF_VALUE && (state & RUN)) {
          flick( BATTMON_BLITZ_AUS, BATTMON_BLITZ_AN );
-	     akkuspannung = akkuspannung - BATTMON_STEP;
+	     akkuspannung_copy = akkuspannung_copy - BATTMON_STEP;
 	   }
 	   state = OFF;
 	#endif
@@ -256,7 +275,6 @@ inline void battmon() {
 
 // The watchdog timer is called every 16ms
 ISR(WDT_vect) {
-	if( PWM_LVL == 0 ) adcread();
 	if (is_pressed()) {
 		#ifndef BATTMON
 		ramp_dir_switched = 0;
@@ -278,7 +296,6 @@ ISR(WDT_vect) {
 			#ifndef BATTMON
 			if( state & RAMP && !ramp_dir_switched ){ramp_dir_switched = 1; ramp_dir = -ramp_dir; }
 			#endif
-
 			if( run_ticks > SHORT_TIMEOUT) timeout_short();
 			if( run_ticks > TURBO_TIMEOUT) timeout_long();
 		}
@@ -294,11 +311,7 @@ int main(void)
 	portinit();
 	pwminit();
 
-#ifdef BATTMON
 	adcinit();
-#else
-	ADCoff;
-#endif
     ACoff; // turn analog Comparator off to save power
 	
 	while(1) {
