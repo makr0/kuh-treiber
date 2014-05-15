@@ -7,70 +7,17 @@
  * BSD LICENSE
  */
 
+#define VERSION 0.3
 
-/*
- * Schaltbild der für die Spannungsmessung relevanten Teile
- *             VCC
- *              |
- *              D1  <- hier fallen VD ab
- * --------     |
- *      8 |-----| 
- *        |     R1
- *      7 |-----|
- *        |     |
- * Attiny |     R2
- *        |     |
- *        |    GND
- *        |
- */
+#include <avr/pgmspace.h>
+#include <avr/io.h>
+#include <util/delay.h>
+#include <avr/interrupt.h>
+#include <avr/wdt.h>	
+#include <avr/eeprom.h>
+#include <avr/sleep.h>
+#include "config.h"
 
-#define LOWBATT_VOLTAGE     3.2    // kritische Akkuspannung in Volt Bei dieser Spannung wird auf PWM_LOWBATT geschaltet
-#define R1                 17.8    // R1 in kOhm (siehe Schaltbild)
-#define R2                 4.67    // R2 in kOhm (siehe Schaltbild)
-#define VD                   0    // Spannungsabfall über die Diode.
-#define PWM_LOWBATT         40    // Auf diesen Wert wird runter geschaltet wenn LOWBATT_VALUE erreicht wurde
-
-#define BATTMON			          // Battery Monitor aktivieren? Wenn nicht definert, wird die RAMP-Funktion aktiviert
-#define BATTMON_REF_VOLTAGE  3.0  // Referenzspannung für Akkumonitor. Bei dieser Spannung blitzt er ein Mal
-
-#define BATTMON_STEP         5 // schrittweite. je kleiner um so öfter blitzt es bei gleicher spannung
-// Blitzzeiten. alles in ms
-#define BATTMON_VORBLITZZEIT_AN     500
-#define BATTMON_VORBLITZZEIT_AUS   1000
-#define BATTMON_BLITZ_AN             50
-#define BATTMON_BLITZ_AUS           250
-#define BATTMON_NACHBLITZZEIT_AN    400
-#define BATTMON_NACHBLITZZEIT_AUS  1500
-
-/* ######## Modes */
-#define MODES			0,32,125,255,100	// Modes, letzter Mode ist immer Battmon mit helligkeit WERT
-#define SHORT_TIMEOUT	    63 // nach dieser Anzahl ticks wird auf RUN geschaltet, 1 TICK = 62ms
-
-/* ### RAMP Settings */
-#define MAX_RAMP	       255 // Max. Helligkeit bei Ramp UP
-#define MIN_RAMP	         7 // Min. Helligkeit bei Ramp DOWN
-#define RAMP_ANSCHLAG_AN   100 // Blitzverhalten bei RAMP-Anschlag
-#define RAMP_ANSCHLAG_AUS   10
-
-/* ######## Temperaturmessung */
-#define PWM_HOT             32    // diese Helligkeit setzen wenn im HOT-Mode
-#define TEMP_CRIT           300   // kritischer Temperaturwert (Wert in ADC), hat nichts mit Grad Celsius zu tun
-#define TEMP_LOG            253   // Anzahl zu speichernder Werte. min und Max werden immer gespeichert
-#define TEMP_LOG_INTERVAL   2*62  // alle 20 sekunden Temperatur loggen
-
-/* ######## TURBO Timeout */
-#define TURBO_TIMEOUT_SEC   5   // Timeout in Sekunden für HIGH Mode
-                                 // wenn nicht verwendet auf 0 setzen.
-
- /* #### PWM-Frequenz in kHz */
- // immer nur eine der drei Zeilen einkommentieren!
-#define PWM_FREQ           32    
-//#define PWM_FREQ           16
-//#define PWM_FREQ           2
-
-
-//#define SERIAL_DEBUG           // debugging über serielle Ausgabe an SERIAL_PIN
-//#define SERIAL_VERBOSE         // Jede kleinigkeit Seriell ausgeben. NUR ZUM TESTEN!
 
 /********************************************
  * ab hier gibts nichts mehr zum einstellen *
@@ -85,25 +32,13 @@
 #define TURBO_TIMEOUT	TURBO_TIMEOUT_SEC * 62 
 
 		
-#include <avr/pgmspace.h>
-#include <avr/io.h>
-#include <util/delay.h>
-#include <avr/interrupt.h>
-#include <avr/wdt.h>	
-#include <avr/eeprom.h>
-#include <avr/sleep.h>
 
-
-#define STAR2_PIN   PB0
-#define SERIAL_PIN  PB3
-#define SWITCH_PIN  PB4		// Wo ist der Taster aneschlossen
-#define PWM_PIN     PB1
 #define VOLTAGE_PIN PB2
 #define ADC_DIDR 	ADC1D	// Digital input disable bit für PB2
 #define ADC_PRSCL   0x06	// clk/64
 
 #define PWM_LVL OCR0B       // OCR0B ist das output compare register für PB1
-#define PWM_SET_LVL(y) PWM_LVL=y
+// #define PWM_SET_LVL(y) PWM_LVL=y
 
 #define DEBOUNCE_PATTERN 0b00001111 // Vergleichspattern für debounce_buffer
 							        // die Bits in debounce_buffer werden alle 16ms gesetzt wenn der Taster
@@ -111,8 +46,6 @@
                                     // wenn dein Taster länger prellt, hier mehr Bits setzen.
 
 // Switch handling
-#define LONG_PRESS_DUR   32 // Wie Viele WDT ticks ein long press sein sollen
-                            // 32 sind 512ms, also ca. halbe sekunde	
 #define UP 1
 #define DOWN -1
 
@@ -157,7 +90,6 @@ static uint16_t templog_ticks = 0;
 static uint16_t temp_max = 0;
 static uint16_t temp_min = 0;
 #endif
-
 
 // PWM konfigurieren
 // chan A and B, phasePWM, Clockbits je nach PWM_FREQ
@@ -227,32 +159,7 @@ uint16_t temp_mess()
   while( ADCSRA & 1<<ADSC );            // until conversion done
   return  ADC; 
 }
-void log_temp() {
-    uint16_t temp;
-    temp = temp_mess();
-    eeprom_write_word((uint16_t *) temp_log_addr,temp);
-    eeprom_write_word((uint16_t *) temp_log_addr+2,0);
-    temp_log_addr+=2;
-    if(temp_log_addr == TEMP_LOG) temp_log_addr = 0;
-    if( temp < temp_min ) eeprom_write_word((uint16_t *) TEMP_MIN_ADDR,temp);
-    if( temp > temp_max ) eeprom_write_word((uint16_t *) TEMP_MAX_ADDR,temp);
-}
-void serialinit() {
-    #ifdef SERIAL_DEBUG
-    Serial.begin(9600); 
-    #endif
-}
-
-void print_version() {
-	uint8_t i;
-    #ifdef SERIAL_DEBUG
-	for(i=0;i<20;i++) Serial.print("-");
-    Serial.println("");
-    Serial.println("- Bull V0.2");
-	for(i=0;i<20;i++) Serial.print("-");
-    Serial.println("");
-    #endif
-}
+#include <avr/io.h>
 
 void print_logged_temps() {
 	uint16_t buf;
@@ -282,6 +189,74 @@ void print_logged_temps() {
     temp_min = 65534;
     temp_max = 0;
     #endif
+}
+
+void log_temp() {
+    uint16_t temp;
+    temp = temp_mess();
+    eeprom_write_word((uint16_t *) temp_log_addr,temp);
+    eeprom_write_word((uint16_t *) temp_log_addr+2,0);
+    temp_log_addr+=2;
+    if(temp_log_addr == TEMP_LOG) temp_log_addr = 0;
+    if( temp < temp_min ) eeprom_write_word((uint16_t *) TEMP_MIN_ADDR,temp);
+    if( temp > temp_max ) eeprom_write_word((uint16_t *) TEMP_MAX_ADDR,temp);
+}
+
+void serialinit() {
+    #ifdef SERIAL_DEBUG
+    Serial.begin(9600); 
+    #endif
+}
+
+void print_version() {
+    uint8_t i;
+    #ifdef SERIAL_DEBUG
+    for(i=0;i<20;i++) Serial.print("-");
+    Serial.println("");
+    Serial.print("- Bull V");
+    Serial.println(VERSION);
+    for(i=0;i<20;i++) Serial.print("-");
+    Serial.println("");
+    #endif
+}
+
+#if defined(SERIAL_DEBUG) && defined( SERIAL_VERBOSE )
+void akku_debug() {
+    float voltage;
+    uint8_t buf;
+    buf=volt_mess();
+    Serial.print("Akku: ");
+    voltage = (1.1/255) * (buf*0.86)*(R1+R2)/R2;
+    Serial.print(voltage);
+    Serial.print(" (");
+    Serial.print(buf,DEC);
+    Serial.println(" )");
+}
+
+void temp_debug() {
+    Serial.print("Temp: ");
+    temperatur=temp_mess();
+    Serial.println(temperatur,DEC);
+}
+#else
+void akku_debug() {}
+void temp_debug() {}
+#endif
+
+// beim schalten auf eine niedrigere PWM
+// expo ausfaden
+void PWM_SET_LVL(uint8_t setpoint) {
+	float power;
+
+	if( PWM_LVL > setpoint ) {
+		power = PWM_LVL;
+		while ( power - setpoint > MIN_RAMP ) {
+				power += ( (float)(setpoint - power) * 0.03);
+		        PWM_LVL = (uint8_t) power;
+		        _delay_ms(10);
+		}
+	}
+	PWM_LVL = setpoint;
 }
 
 void sleep_until_switch_press()
@@ -314,7 +289,7 @@ inline void tap() {
 	if( state & ( OFF | WAKEUP) ) {
 		state = SWITCH;
 		mode_idx = 1;
-		ramp_dir = UP;
+		ramp_dir = DOWN;
 		return;
 	}
 	if( state & SWITCH ) {
@@ -392,6 +367,7 @@ void delay_ms(uint16_t msec) {
     } 
 }  
 inline void do_ramp() {
+
 	if( ramp_dir < 0 && PWM_LVL == MIN_RAMP
 	 || ramp_dir > 0 && PWM_LVL == MAX_RAMP )
 	{
@@ -403,19 +379,25 @@ inline void do_ramp() {
 
 inline void battmon() {
 	state = RUN;
-	#ifdef BATTMON
 	   uint8_t akkuspannung;
        akkuspannung = volt_mess();
-
+       #ifdef SERIAL_DEBUG
+       Serial.println("battmon");
+       #endif
 //	   akkuspannung=129; // debug
 	   flick(BATTMON_VORBLITZZEIT_AUS,BATTMON_VORBLITZZEIT_AN);
 	   while (akkuspannung > BATTMON_REF_VALUE && (state & RUN)) {
          flick( BATTMON_BLITZ_AUS, BATTMON_BLITZ_AN );
 	     akkuspannung = akkuspannung - BATTMON_STEP;
 	   }
-	   flick(BATTMON_NACHBLITZZEIT_AUS,BATTMON_NACHBLITZZEIT_AN);
+	   if( state & RUN )
+	   		flick(BATTMON_NACHBLITZZEIT_AUS,BATTMON_NACHBLITZZEIT_AN);
+       #ifdef SERIAL_DEBUG
+       Serial.println("battmon end");
+       #endif
+       PWM_LVL = 0;
 	   state = OFF;
-	#endif
+	   delay_ms(50);
 }
 
 // The watchdog timer is called every 16ms
@@ -443,28 +425,7 @@ ISR(WDT_vect) {
 		press_duration = 0;
 	}
 }
-#if defined(SERIAL_DEBUG) && defined( SERIAL_VERBOSE )
-void akku_debug() {
-	float voltage;
-	uint8_t buf;
-	buf=volt_mess();
-	Serial.print("Akku: ");
-	voltage = (1.1/255) * (buf*0.86)*(R1+R2)/R2;
-	Serial.print(voltage);
-	Serial.print(" (");
-	Serial.print(buf,DEC);
-	Serial.println(" )");
-}
 
-void temp_debug() {
-	Serial.print("Temp: ");
-	temperatur=temp_mess();
-	Serial.println(temperatur,DEC);
-}
-#else
-void akku_debug() {}
-void temp_debug() {}
-#endif
 
 int main(void)
 {	
@@ -484,8 +445,12 @@ int main(void)
 		// Endlosschleife. im WDT interrupt wird der Taster abgefragt
 		// modes werden hier geändert in abhängigkeit der state-Variable
 		if( state & SWITCH ) {
-			PWM_SET_LVL( pgm_read_byte(&modes[mode_idx]) );
-			if( mode_idx == sizeof(modes)-1) battmon();
+			if( mode_idx == sizeof(modes)-1){
+				PWM_LVL = pgm_read_byte(&modes[mode_idx]);
+				battmon();
+			} else {
+				PWM_SET_LVL( pgm_read_byte(&modes[mode_idx]) );
+			}
 		}
 		if( state & HOT ){
 			PWM_SET_LVL( PWM_HOT );
@@ -498,7 +463,6 @@ int main(void)
 	#endif
 			delay_ms(10); // ohne Delay wird PWM-Wert tatsächlich nicht gesetzt vor sleep
 			sleep_until_switch_press();
-			ramp_dir = UP;
 			state = WAKEUP;
 		}
         if( run_ticks > SHORT_TIMEOUT) timeout_short();
