@@ -7,7 +7,7 @@
  * BSD LICENSE
  */
 
-#define VERSION 0.3
+#define VERSION 0.4
 
 #include <avr/pgmspace.h>
 #include <avr/io.h>
@@ -25,8 +25,8 @@
  */
 
 // umrechnen der Spannungen in ADC-Wandler werte (integer)
-#define LOWBATT_VALUE     ((uint16_t) (((LOWBATT_VOLTAGE     - VD) * R2 * 255) / ((R1 + R2) * 1.1)))+25
-#define BATTMON_REF_VALUE ((uint16_t) (((BATTMON_REF_VOLTAGE - VD) * R2 * 255) / ((R1 + R2) * 1.1)))+25
+#define LOWBATT_VALUE     ((uint16_t) (((LOWBATT_VOLTAGE     - VD) * R2 * 255) / ((R1 + R2) * 1.1)))
+#define BATTMON_REF_VALUE ((uint16_t) (((BATTMON_REF_VOLTAGE - VD) * R2 * 255) / ((R1 + R2) * 1.1)))
 
 // Sekunden in ticks umrechnen (1 tick = .016 s)
 #define TURBO_TIMEOUT	TURBO_TIMEOUT_SEC * 62 
@@ -69,16 +69,15 @@
 
 PROGMEM  uint8_t modes[] = { MODES };
 volatile uint8_t mode_idx = 0;
-static uint8_t press_duration = 0;
+volatile uint8_t press_duration = 0;
 volatile int8_t ramp_dir = UP;
-static uint8_t ramp_delay = 0;
 static uint8_t ramp_dir_switched = 0;
 
 static uint8_t old_lvl= 0;
 volatile uint8_t state = OFF;
 volatile uint16_t run_ticks = 0;
-volatile uint16_t akku_ticks = 0;
-#define AKKU_DEBUG_TIMEOUT 60
+volatile uint16_t debug_ticks = 0;
+#define DEBUG_TIMEOUT 60
 volatile uint8_t wdt_fired = 0;
 static uint16_t temperatur = 0;
 #ifdef TEMP_LOG 
@@ -86,7 +85,8 @@ const uint16_t * TEMP_MIN_ADDR = (uint16_t *) (TEMP_LOG*2);
 const uint16_t * TEMP_MAX_ADDR = (uint16_t *) (TEMP_LOG*2+2);
 
 static uint16_t temp_log_addr = 0;
-static uint16_t templog_ticks = 0;
+volatile uint16_t tempmess_ticks = 0;
+volatile uint16_t templog_ticks = 0;
 static uint16_t temp_max = 0;
 static uint16_t temp_min = 0;
 #endif
@@ -115,7 +115,7 @@ inline void prepare_wdt_and_sleep() {
     // WDT Interrupt alle 16ms
     WDTCR = 0<< WDIF | 1<< WDIE | 0<< WDP3 | 0<< WDCE | 0<< WDE | 0<< WDP2 | 0<< WDP1 |0<< WDP0;
 	GIMSK |= (1 << PCIE);       // enable pin change interrupt
-	PCMSK = 1<<PCINT4;			// PCINT3/PB3 for triggers pin change interrupt
+	PCMSK = 1<<PCINT3;			// PCINT3/PB3 for triggers pin change interrupt
 	set_sleep_mode( SLEEP_MODE_PWR_DOWN);		// prepare sleep
 	sleep_enable();
 }
@@ -140,7 +140,7 @@ inline void WDT_off()
     sei();                          // Enable interrupts
 }
 
-uint8_t volt_mess() {
+uint8_t _volt_mess() {
   ADMUX = 1<<REFS1 | 0<<REFS0 | 1<<ADLAR | 0<<REFS2 | 0<<MUX3 | 0<<MUX2 | 0<<MUX1 | 1<<MUX0;
                 // REF = 1.1V, 8Bit, ADC1/PB2
   ADCSRA = 1<<ADEN | 1<<ADSC | 0<<ADATE | 0<<ADIF | 0<<ADIE | 1<<ADPS2 | 0<<ADPS1 | 0<<ADPS0;
@@ -149,8 +149,17 @@ uint8_t volt_mess() {
     while (ADCSRA&64);
     return ADCH;
 }
+uint8_t volt_mess() {
+    #define VOLT_MESS_AVG 200
+    uint16_t buf=0, i;
+    for(i=0;i<VOLT_MESS_AVG;i++) {
+        buf += _volt_mess();
+    }
+    buf = buf / VOLT_MESS_AVG;
+    return buf;
+}
 
-uint16_t temp_mess()
+uint16_t _temp_mess()
 {
   ADMUX = 1<<REFS1 | 0<<REFS0 | 0<<ADLAR | 0<<REFS2 | 1<<MUX3 | 1<<MUX2 | 1<<MUX1 | 1<<MUX0;
                 // REF = 1.1V, 10Bit, Temp
@@ -159,6 +168,17 @@ uint16_t temp_mess()
   while( ADCSRA & 1<<ADSC );            // until conversion done
   return  ADC; 
 }
+uint16_t temp_mess() {
+    #define TEMP_MESS_AVG 200
+    float buf=0;
+    uint16_t i;
+    for(i=0;i<TEMP_MESS_AVG;i++) {
+        buf += _temp_mess();
+    }
+    buf = buf / TEMP_MESS_AVG;
+    return buf;
+}
+
 #include <avr/io.h>
 
 void print_logged_temps() {
@@ -175,15 +195,12 @@ void print_logged_temps() {
     Serial.println("");
     Serial.println("-= Temperatur-Log =-");
     for(temp_log_addr=0;temp_log_addr<TEMP_LOG*2;temp_log_addr+=2) {
-    	PWM_LVL=0;
     	buf = eeprom_read_word((uint16_t *) temp_log_addr);
-    	PWM_LVL= pgm_read_byte(&modes[sizeof(modes)-1]);
         Serial.print(buf,DEC);
         Serial.print(", ");
     }
     Serial.println("EOF");
     #endif
-  	PWM_LVL=0;
     eeprom_write_word((uint16_t *) TEMP_MIN_ADDR,65534);
     eeprom_write_word((uint16_t *) TEMP_MAX_ADDR,0);
     temp_min = 65534;
@@ -192,6 +209,7 @@ void print_logged_temps() {
 }
 
 void log_temp() {
+    Serial.println('log_temp');
     uint16_t temp;
     temp = temp_mess();
     eeprom_write_word((uint16_t *) temp_log_addr,temp);
@@ -248,14 +266,14 @@ void temp_debug() {}
 void PWM_SET_LVL(uint8_t setpoint) {
 	float power;
 
-	if( PWM_LVL > setpoint ) {
+//	if( PWM_LVL > setpoint ) {
 		power = PWM_LVL;
-		while ( power - setpoint > MIN_RAMP ) {
+		while ( abs(power - setpoint) > MIN_RAMP ) {
 				power += ( (float)(setpoint - power) * 0.03);
 		        PWM_LVL = (uint8_t) power;
-		        _delay_ms(10);
+		        _delay_ms(3);
 		}
-	}
+//	}
 	PWM_LVL = setpoint;
 }
 
@@ -307,7 +325,7 @@ inline void long_press() {
 
 	if( state & ( OFF | WAKEUP ) ) {
 		ramp_dir = DOWN;
-		PWM_SET_LVL( 255 );
+		PWM_LVL = 255;
 		state = RUN;
 		while(is_pressed());
 	}
@@ -327,15 +345,17 @@ inline void timeout_short() {
 	        #endif
 	    	PWM_SET_LVL( PWM_LOWBATT );
 	    }
-	    // Übertemperatur signalisieren
-	    temperatur=temp_mess();
-	    if( temperatur >= TEMP_CRIT ){
-	        #ifdef SERIAL_DEBUG
-	        Serial.print("HOT detected: ");
-	        Serial.println(temperatur,DEC);
-	        #endif
-	        state = HOT;
-	    }
+	    // Temperatur messen
+        if( tempmess_ticks >= TEMP_INTERVAL ) {
+            tempmess_ticks = 0;
+	        temperatur=temp_mess();        
+            if( temperatur >= TEMP_CRIT ){
+                #ifdef SERIAL_DEBUG
+                Serial.print("HOT");
+                #endif
+                state = HOT;
+            }
+        }
     }
 }
 
@@ -348,15 +368,13 @@ inline void timeout_long() {
 	}
 }
 
-void flick(uint16_t off,uint16_t on) {
-	old_lvl = PWM_LVL;
-	PWM_LVL = 0;
-	delay_ms( off );
-	PWM_LVL = old_lvl;
+void flick(uint16_t on,uint16_t off) {
+    uint8_t buf;
+    buf= PWM_LVL;
 	delay_ms( on );
-	PWM_LVL = 0;
-	delay_ms( off );
-	PWM_LVL = old_lvl;
+    PWM_LVL = 0;
+    delay_ms( off );
+    PWM_LVL = buf;
 }
 
 
@@ -367,14 +385,35 @@ void delay_ms(uint16_t msec) {
     } 
 }  
 inline void do_ramp() {
+    float power;
+    uint8_t setpoint;
+    uint16_t i;
 
-	if( ramp_dir < 0 && PWM_LVL == MIN_RAMP
-	 || ramp_dir > 0 && PWM_LVL == MAX_RAMP )
-	{
-		flick(RAMP_ANSCHLAG_AUS,RAMP_ANSCHLAG_AN);
-		return;
-	}
-	PWM_LVL += ramp_dir;
+    cli();
+
+    if( ramp_dir == UP) setpoint = MAX_RAMP;
+    if( ramp_dir == DOWN) setpoint = MIN_RAMP;
+    power = PWM_LVL;
+    while ( abs(power - setpoint) > MIN_RAMP && is_pressed()) {
+            if( ramp_dir == UP)
+                power += ( (float)(setpoint - (255-power)) * 0.01);
+            else
+                power += ( (float)(setpoint - power) * 0.02);
+
+            PWM_LVL = (uint8_t) power;
+            _delay_ms(5);
+    }
+    while(is_pressed()) {
+        i=i+1;
+        if( i == RAMP_ANSCHLAG_AN) PWM_LVL = (uint8_t) power;
+        if( i == RAMP_ANSCHLAG_AUS) PWM_LVL = ramp_dir == UP ? RAMP_ANSCHLAG_HIGH_AUS : 0;
+        if( i == RAMP_ANSCHLAG_AUS + RAMP_ANSCHLAG_AN ) i=0;
+        delay_ms(1);
+    }
+    ramp_dir = -ramp_dir;
+    state = RUN;
+    PWM_LVL = (uint8_t) power;
+    sei();
 }
 
 inline void battmon() {
@@ -384,18 +423,24 @@ inline void battmon() {
        #ifdef SERIAL_DEBUG
        Serial.println("battmon");
        #endif
-//	   akkuspannung=129; // debug
-	   flick(BATTMON_VORBLITZZEIT_AUS,BATTMON_VORBLITZZEIT_AN);
+       old_lvl = PWM_LVL;
+       PWM_LVL = 0;
+       delay_ms( BATTMON_PAUSE );
+       PWM_LVL = old_lvl;
+	   flick(BATTMON_VORBLITZZEIT_AN, BATTMON_VORBLITZZEIT_AUS);
+
 	   while (akkuspannung > BATTMON_REF_VALUE && (state & RUN)) {
-         flick( BATTMON_BLITZ_AUS, BATTMON_BLITZ_AN );
+         flick( BATTMON_BLITZ_AN, BATTMON_BLITZ_AUS );
 	     akkuspannung = akkuspannung - BATTMON_STEP;
 	   }
-	   if( state & RUN )
-	   		flick(BATTMON_NACHBLITZZEIT_AUS,BATTMON_NACHBLITZZEIT_AN);
+       PWM_LVL = 0;
+       delay_ms( BATTMON_PAUSE );
+       PWM_LVL = old_lvl;
+       delay_ms(BATTMON_NACHBLITZZEIT_AN);
+       PWM_LVL = 0;
        #ifdef SERIAL_DEBUG
        Serial.println("battmon end");
        #endif
-       PWM_LVL = 0;
 	   state = OFF;
 	   delay_ms(50);
 }
@@ -407,18 +452,15 @@ ISR(WDT_vect) {
 		if (press_duration < 255) {
 			press_duration++;
 		}
-		
-		if (press_duration >= LONG_PRESS_DUR ) {
-			long_press();
-		}
 	} else {
 		// Not pressed
 		if (press_duration > 0 && press_duration < LONG_PRESS_DUR) {
 			tap();
 		} else {
 			run_ticks++;
-            akku_ticks++;
+            debug_ticks++;
             templog_ticks++;
+            tempmess_ticks++;
 			if( state & OFF ) run_ticks=0;
 			if( state & RAMP && !ramp_dir_switched ){ramp_dir_switched = 1; ramp_dir = -ramp_dir; }
 		}
@@ -437,6 +479,7 @@ int main(void)
     cli();
     print_version();
     print_logged_temps();
+    tempmess_ticks = TEMP_INTERVAL;
 
     ACoff; // turn analog Comparator off to save power
     sei();
@@ -452,11 +495,15 @@ int main(void)
 				PWM_SET_LVL( pgm_read_byte(&modes[mode_idx]) );
 			}
 		}
-		if( state & HOT ){
-			PWM_SET_LVL( PWM_HOT );
+		if( state & HOT ) {
+            old_lvl = PWM_LVL;
+            PWM_SET_LVL(10);
+			PWM_SET_LVL( old_lvl / 2 );
+            state = RUN;
 		}
 
 		if (state & OFF ) {
+            tempmess_ticks = TEMP_INTERVAL;
 			PWM_SET_LVL( 0 );
 	#if defined(SERIAL_DEBUG) && defined( SERIAL_VERBOSE )
 			Serial.println("sleep");
@@ -466,11 +513,17 @@ int main(void)
 			state = WAKEUP;
 		}
         if( run_ticks > SHORT_TIMEOUT) timeout_short();
-        if( run_ticks > TURBO_TIMEOUT && TURBO_TIMEOUT > 0 ) timeout_long();
+        #if TURBO_TIMEOUT > 0
+        if( run_ticks > TURBO_TIMEOUT ) timeout_long();
+        #endif
+        if (press_duration >= LONG_PRESS_DUR ) {
+            long_press();
+        }
+
         if( templog_ticks > TEMP_LOG_INTERVAL){templog_ticks=0; log_temp();}
-        if( akku_ticks > AKKU_DEBUG_TIMEOUT ){
+        if( debug_ticks > DEBUG_TIMEOUT ){
             akku_debug();
-            akku_ticks=0;
+            debug_ticks=0;
             temp_debug();
         }
 	}
