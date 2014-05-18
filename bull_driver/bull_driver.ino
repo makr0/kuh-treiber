@@ -209,6 +209,7 @@ void print_logged_temps() {
 }
 
 void log_temp() {
+	#ifdef TEMP_LOG
     Serial.println('log_temp');
     uint16_t temp;
     temp = temp_mess();
@@ -218,6 +219,7 @@ void log_temp() {
     if(temp_log_addr == TEMP_LOG) temp_log_addr = 0;
     if( temp < temp_min ) eeprom_write_word((uint16_t *) TEMP_MIN_ADDR,temp);
     if( temp > temp_max ) eeprom_write_word((uint16_t *) TEMP_MAX_ADDR,temp);
+    #endif
 }
 
 void serialinit() {
@@ -346,6 +348,7 @@ inline void timeout_short() {
 	    	PWM_SET_LVL( PWM_LOWBATT );
 	    }
 	    // Temperatur messen
+	    #ifdef TEMP_LOG
         if( tempmess_ticks >= TEMP_INTERVAL ) {
             tempmess_ticks = 0;
 	        temperatur=temp_mess();        
@@ -356,6 +359,7 @@ inline void timeout_short() {
                 state = HOT;
             }
         }
+        #endif
     }
 }
 
@@ -459,8 +463,9 @@ ISR(WDT_vect) {
 		} else {
 			run_ticks++;
             debug_ticks++;
+            #ifdef TEMP_LOG
             templog_ticks++;
-            tempmess_ticks++;
+            #endif
 			if( state & OFF ) run_ticks=0;
 			if( state & RAMP && !ramp_dir_switched ){ramp_dir_switched = 1; ramp_dir = -ramp_dir; }
 		}
@@ -479,7 +484,9 @@ int main(void)
     cli();
     print_version();
     print_logged_temps();
+    #ifdef TEMP_LOG
     tempmess_ticks = TEMP_INTERVAL;
+    #endif
 
     ACoff; // turn analog Comparator off to save power
     sei();
@@ -503,7 +510,9 @@ int main(void)
 		}
 
 		if (state & OFF ) {
+            #ifdef TEMP_LOG
             tempmess_ticks = TEMP_INTERVAL;
+            #endif
 			PWM_SET_LVL( 0 );
 	#if defined(SERIAL_DEBUG) && defined( SERIAL_VERBOSE )
 			Serial.println("sleep");
@@ -520,7 +529,9 @@ int main(void)
             long_press();
         }
 
+        #ifdef TEMP_LOG
         if( templog_ticks > TEMP_LOG_INTERVAL){templog_ticks=0; log_temp();}
+        #endif
         if( debug_ticks > DEBUG_TIMEOUT ){
             akku_debug();
             debug_ticks=0;

@@ -49,7 +49,7 @@
 /* ######## Temperaturmessung */
 #define TEMP_INTERVAL       30*62  // alle 30 Sekunden auf Übertemperatur prüfen
 #define TEMP_CRIT           318   // kritischer Temperaturwert (Wert in ADC), hat nichts mit Grad Celsius zu tun
-#define TEMP_LOG            253   // Anzahl zu speichernder Werte. min und Max werden immer gespeichert
+//#define TEMP_LOG            253   // Anzahl zu speichernder Werte. min und Max werden immer gespeichert
 #define TEMP_LOG_INTERVAL   20*62  // alle 20 sekunden Temperatur loggen
 
 /* ######## TURBO Timeout */
@@ -69,5 +69,5 @@
 #define SWITCH_PIN  PB3		// Wo ist der Taster aneschlossen
 #define PWM_PIN     PB1
 
-#define SERIAL_DEBUG           // debugging über serielle Ausgabe an SERIAL_PIN
+//#define SERIAL_DEBUG           // debugging über serielle Ausgabe an SERIAL_PIN
 //#define SERIAL_VERBOSE         // Jede kleinigkeit Seriell ausgeben. NUR ZUM TESTEN!
